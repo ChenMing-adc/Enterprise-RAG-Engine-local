@@ -14,12 +14,17 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
 
-# 1. 加载环境变量
+# 【第一处核心新增】引入 Rerank 相关的 LangChain 模块
+# 【替换掉之前的 LangChain 压缩包导入】
+from sentence_transformers import CrossEncoder
+from langchain_core.runnables import RunnableLambda
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
 load_dotenv()
 os.makedirs("data", exist_ok=True)
 
 st.set_page_config(page_title="私有文献知识库", page_icon="📚", layout="wide")
-st.title("📚 私有文献知识库 (专业级 RAG 版)")
+st.title("📚 私有文献知识库 (Rerank重排加强版)")
 
 # ================= 侧边栏：文件上传与管理 =================
 if "uploader_key" not in st.session_state:
@@ -74,12 +79,43 @@ def init_knowledge_base():
     embeddings = HuggingFaceEmbeddings(model_name="shibing624/text2vec-base-chinese")
     vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
 
-    # 拿到检索器
-    retriever = vectorstore.as_retriever()
+    # ================= 【纯手工底层重排架构】 =================
+    # 1. 基础检索器（召回）：一次性取出 10 个片段
+    base_retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+    # 2. 原生加载 BAAI 重排模型
+    cross_encoder = CrossEncoder("BAAI/bge-reranker-base")
+
+    # 3. 手写重排核心逻辑！(面试可以重点讲这个函数)
+    def advanced_retrieve(query: str):
+        # 阶段一：粗搜召回 Top 10
+        docs = base_retriever.invoke(query)
+        if not docs:
+            return []
+
+        # 阶段二：重排打分
+        # 将用户问题和每个文档片段组合成一对 (Pair)
+        pairs = [[query, doc.page_content] for doc in docs]
+        # Cross-Encoder 进行交叉注意力计算，输出得分
+        scores = cross_encoder.predict(pairs)
+
+        # 将算出来的精确分数存入文档的 metadata 中
+        for doc, score in zip(docs, scores):
+            doc.metadata['relevance_score'] = float(score)
+
+        # 按照分数从高到低排序 (降序)
+        docs.sort(key=lambda x: x.metadata['relevance_score'], reverse=True)
+
+        # 阶段三：切片，只返回最精准的 Top 3 给大模型
+        return docs[:3]
+
+    # 4. 用 RunnableLambda 将我们的手写函数无缝接入 LangChain 的 LCEL 管道
+    advanced_retriever = RunnableLambda(advanced_retrieve)
+    # =========================================================
 
     api_key = os.environ.get("YOUR_DASHSCOPE_API_KEY")
     if not api_key:
-        st.error(" 未读取到 YOUR_DASHSCOPE_API_KEY，请检查 .env 文件！")
+        st.error("⚠️ 未读取到YOUR_DASHSCOPE_API_KEY，请检查 .env 文件！")
         st.stop()
 
     llm = ChatOpenAI(
@@ -104,37 +140,34 @@ def init_knowledge_base():
         ("human", "{question}")
     ])
 
-    # 【核心改动】我们把检索器抽离出来了，这里的 rag_chain 只负责生成答案
     rag_chain = prompt | llm | StrOutputParser()
 
-    return retriever, rag_chain
+    # 注意这里返回的是加强版的 advanced_retriever
+    return advanced_retriever, rag_chain
 
 
-# 获取检索器和生成链
 retriever, rag_chain = init_knowledge_base()
 
 # ================= 主界面：流式聊天与溯源 =================
 if retriever is None:
     st.info("👈 请先在左侧边栏上传 PDF 文献，并点击【保存并更新知识库】")
 else:
-    # 渲染历史聊天记录（带上来源信息）
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            # 如果这条消息有来源信息，就展示出来
             if "sources" in msg and msg["sources"]:
-                with st.expander("📚 查看参考来源"):
+                with st.expander("📚 查看参考来源 (Rerank Top-3)"):
                     for i, source in enumerate(msg["sources"]):
-                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页)**")
+                        # Rerank 后返回的文档，metadata 里会多出一个 'relevance_score' 字段！
+                        score_text = f" (相关度得分: {source['score']:.4f})" if 'score' in source else ""
+                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页){score_text}**")
                         st.caption(source['content'])
 
     if question := st.chat_input("请根据文献内容提问（支持上下文追问）..."):
-        # 1. 存入并展示用户问题
         with st.chat_message("user"):
             st.markdown(question)
         st.session_state.messages.append({"role": "user", "content": question})
 
-        # 组装历史记录
         chat_history = []
         for msg in st.session_state.messages[:-1]:
             if msg["role"] == "user":
@@ -142,53 +175,47 @@ else:
             else:
                 chat_history.append(AIMessage(content=msg["content"]))
 
-        # 2. AI 处理环节
         with st.chat_message("assistant"):
-            # 先检索文档（溯源的秘密就在这里）
-            with st.spinner("🔍 正在检索相关文献..."):
+            with st.spinner("🔍 Reranker 引擎正在进行交叉重排精搜..."):
+                # 这里调用的是 advanced_retriever，它会自动执行：取10个 -> Rerank打分 -> 返回Top 3
                 retrieved_docs = retriever.invoke(question)
 
-            # 格式化检索到的文档用于大模型，同时提取来源数据用于 UI 展示
             context_text = ""
             source_data = []
             for i, doc in enumerate(retrieved_docs):
-                # 从 PDF 的 metadata 里提取文件名和页码
                 file_name = os.path.basename(doc.metadata.get('source', '未知文档'))
-                # PDF页码默认从0开始，我们加1变成人类可读的页码
                 page_num = doc.metadata.get('page', 0) + 1
+                # 获取 Reranker 算出来的精确得分
+                score = doc.metadata.get('relevance_score', 0)
 
                 context_text += f"\n[文档 {i + 1}] {file_name} (第{page_num}页):\n{doc.page_content}\n"
                 source_data.append({
                     "file": file_name,
                     "page": page_num,
-                    "content": doc.page_content[:150] + "..."  # 截取部分文本用于UI展示
+                    "score": score,  # 保存得分用于UI展示
+                    "content": doc.page_content[:150] + "..."
                 })
 
-            # 【核心魔法：流式输出】
-            response_placeholder = st.empty()  # 创建一个空的占位符
+            response_placeholder = st.empty()
             full_response = ""
 
-            # 使用 .stream() 替代 .invoke()，实现打字机效果
             for chunk in rag_chain.stream({
                 "context": context_text,
                 "question": question,
                 "chat_history": chat_history
             }):
                 full_response += chunk
-                # 动态加上光标，视觉效果拉满
                 response_placeholder.markdown(full_response + "▌")
 
-            # 输出结束后去掉光标
             response_placeholder.markdown(full_response)
 
-            # 展示参考来源组件
             if source_data:
-                with st.expander("📚 查看参考来源"):
+                with st.expander("📚 查看参考来源 (Rerank Top-3)"):
                     for i, source in enumerate(source_data):
-                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页)**")
+                        score_text = f" (相关度得分: {source['score']:.4f})" if 'score' in source else ""
+                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页){score_text}**")
                         st.caption(source['content'])
 
-            # 将完整的回答和来源存入记忆
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": full_response,
