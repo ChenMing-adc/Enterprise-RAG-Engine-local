@@ -1,8 +1,26 @@
-streamlit
-langchain
-langchain-openai
-langchain-community
-chromadb
-pypdf
-python-dotenv
-tiktoken
+# ==========================================
+# 📚 私有文献知识库 (企业级 RAG 架构) 依赖清单
+# ==========================================
+
+# --- 1. 核心 Web 框架与环境 ---
+streamlit               # 构建可视化交互网页的超级神器
+python-dotenv           # 优雅地管理 .env 环境变量和 API Key
+
+# --- 2. 大模型与 RAG 核心编排框架 (LangChain 生态) ---
+langchain               # AI Agent 与 RAG 的底层编排框架
+langchain-core          # LangChain 核心抽象接口 (LCEL 语法依赖)
+langchain-community     # LangChain 社区生态包 (包含丰富的组件)
+langchain-openai        # 兼容 OpenAI 协议的接口库 (我们用它来接 DeepSeek)
+langchain-text-splitters # 专业的文本切块工具
+langchain-huggingface   # 用于加载本地 HuggingFace 嵌入模型 (M3E)
+
+# --- 3. 向量数据库 ---
+chromadb                # 轻量级、极速的本地向量数据库 (用于密集检索)
+
+# --- 4. 混合检索与重排引擎 (算法杀手锏) ---
+sentence-transformers   # NLP 霸榜库，提供 Cross-Encoder 重排模型和底层特征提取
+rank_bm25               # BM25 稀疏检索核心算法库 (混合检索必备)
+
+# --- 5. 文档解析引擎 (对付公式/表格的终极武器) ---
+llama-parse             # LlamaIndex 团队出品的多模态极速文档解析器 (PDF 转 Markdown/LaTeX)
+nest-asyncio            # 解决异步事件循环冲突的底层补丁 (供 LlamaParse 在 Streamlit 中运行)

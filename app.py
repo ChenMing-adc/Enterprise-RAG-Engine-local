@@ -3,20 +3,19 @@ import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage
 
 from config import DATA_DIR
-from retrieval import build_advanced_retriever
+from retrieval import build_advanced_retriever, add_pdf_to_db, delete_pdf_from_db  # 【引入 CRUD 函数】
 from generation import build_rag_chain
 
 st.set_page_config(page_title="私有文献知识库", page_icon="📚", layout="wide")
-st.title("📚 私有文献知识库 (企业级架构解耦版)")
+st.title("📚 私有文献知识库 (增量更新数据库版)")
 
-# ================= 状态初始化 =================
+# ================= 状态与初始化 =================
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 
-# ================= 知识库初始化 =================
 @st.cache_resource
 def init_system():
     retriever = build_advanced_retriever()
@@ -26,7 +25,7 @@ def init_system():
 
 retriever, rag_chain = init_system()
 
-# ================= 侧边栏 UI =================
+# ================= 侧边栏：上传与删除联动 =================
 with st.sidebar:
     st.header("📁 文档管理")
     uploaded_files = st.file_uploader(
@@ -40,9 +39,15 @@ with st.sidebar:
         if uploaded_files:
             for uploaded_file in uploaded_files:
                 file_path = os.path.join(DATA_DIR, uploaded_file.name)
+                # 写入本地 data 文件夹
                 with open(file_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
-            st.cache_resource.clear()
+
+                # 【新增】：通知数据库解析并存入这个新文件
+                with st.spinner(f"正在解析并写入数据库: {uploaded_file.name}"):
+                    add_pdf_to_db(file_path)
+
+            st.cache_resource.clear()  # 刷新检索器缓存（为了让 BM25 读取最新数据库）
             st.session_state.uploader_key += 1
             st.session_state.messages = []
             st.rerun()
@@ -62,6 +67,11 @@ with st.sidebar:
                     file_path = os.path.join(DATA_DIR, f)
                     if os.path.exists(file_path):
                         os.remove(file_path)
+
+                    # 【新增】：通知数据库擦除这篇文献的所有向量记忆
+                    with st.spinner(f"正在从数据库擦除: {f}"):
+                        delete_pdf_from_db(f)
+
                     st.cache_resource.clear()
                     st.session_state.messages = []
                     st.rerun()

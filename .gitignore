@@ -4,6 +4,8 @@
 # 忽略 PDF 数据文件夹
 data/
 
+chroma_db/
+
 # 忽略 Python 生成的缓存文件
 __pycache__/
 *.pyc

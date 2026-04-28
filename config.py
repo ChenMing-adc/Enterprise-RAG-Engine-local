@@ -8,6 +8,10 @@ load_dotenv()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# 【新增】向量数据库持久化目录
+CHROMA_PERSIST_DIR = "chroma_db"
+os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
+
 # 模型配置
 EMBEDDING_MODEL = "moka-ai/m3e-base"
 RERANKER_MODEL = "BAAI/bge-reranker-base"
