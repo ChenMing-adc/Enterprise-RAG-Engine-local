@@ -17,11 +17,19 @@
 git clone https://github.com/ChenMing-adc/Enterprise-RAG-Engine-local.git
 cd Enterprise-RAG-Engine-local
 ```
-### 2. 安装依赖
+### 2. 创建并激活虚拟环境 (推荐)
+```bash
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# Mac/Linux:
+source venv/bin/activate
+```
+### 3. 安装依赖
 ```bash
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
-### 3. 配置环境变量
+### 4. 配置环境变量
 在项目根目录创建一个 .env 文件，并填入你的 API 密钥：
 ```python
 # 核心大模型 API (如使用阿里云百炼平台https://dashscope.aliyuncs.com/compatible-mode/v1)
@@ -29,7 +37,7 @@ YOUR_DASHSCOPE_API_KEY=sk-你的api密钥
 # 多模态文档解析 API (去 llamacloud 官网免费申请)
 LLAMA_CLOUD_API_KEY=llx-你的llamaparse密钥
 ```
-### 4. 启动系统
+### 5. 启动系统
 ```bash
 streamlit run app.py
 ```
