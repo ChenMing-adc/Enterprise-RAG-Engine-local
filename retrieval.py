@@ -87,13 +87,22 @@ def build_advanced_retriever():
     bm25_retriever = BM25Retriever.from_documents(splits)
     bm25_retriever.k = RETRIEVER_K
 
+    # ... 前面的代码不变 ...
+
     # 3. 精排模型
     cross_encoder = CrossEncoder(RERANKER_MODEL)
 
-    def advanced_retrieve(query: str):
-        dense_docs = vector_retriever.invoke(query)
-        sparse_docs = bm25_retriever.invoke(query)
+    # 【修改】：将入参改为 queries (列表)
+    def advanced_retrieve(queries: list):
+        dense_docs = []
+        sparse_docs = []
 
+        # 阶段一：Multi-Query 遍历并发召回
+        for q in queries:
+            dense_docs.extend(vector_retriever.invoke(q))
+            sparse_docs.extend(bm25_retriever.invoke(q))
+
+        # 阶段二：手写 RRF 融合去重 (把不同 query 搜出来的重复文档自然融合)
         rrf_scores = {}
         doc_map = {}
 
@@ -113,7 +122,10 @@ def build_advanced_retriever():
         if not candidate_docs:
             return []
 
-        pairs = [[query, doc.page_content] for doc in candidate_docs]
+        # 阶段三：使用用户的原始问题（通常是 queries 里的第一个或组合）进行 Rerank
+        # 这里为了精准，我们将最原始的问题与候选文档比对
+        core_query = queries[0]
+        pairs = [[core_query, doc.page_content] for doc in candidate_docs]
         scores = cross_encoder.predict(pairs)
 
         for doc, score in zip(candidate_docs, scores):

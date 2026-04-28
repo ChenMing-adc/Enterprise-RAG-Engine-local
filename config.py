@@ -22,6 +22,6 @@ LLM_API_KEY = os.environ.get("YOUR_DASHSCOPE_API_KEY")
 # RAG 超参数配置
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
-RETRIEVER_K = 10       # 粗搜召回数量
-RERANK_TOP_K = 3       # 精排最终保留数量
+RETRIEVER_K = 20       # 粗搜召回数量
+RERANK_TOP_K = 5       # 精排最终保留数量
 RRF_K = 60             # RRF 融合平滑常数
