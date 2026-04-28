@@ -33,4 +33,4 @@ LLAMA_CLOUD_API_KEY=llx-你的llamaparse密钥
 ```bash
 streamlit run app.py
 ```
-启动后，浏览器会自动打开 http://localhost:8501。在左侧边栏上传你的 PDF 文献，即可开始体验极速精准的私有知识问答！
+启动后，浏览器会自动打开 http://localhost:8501. 在左侧边栏上传你的 PDF 文献，即可开始体验极速精准的私有知识问答！
