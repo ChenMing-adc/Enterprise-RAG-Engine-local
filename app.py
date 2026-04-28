@@ -12,22 +12,18 @@ from langchain_community.vectorstores import Chroma
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-# 【新增】引入 LangChain 的消息格式
 from langchain_core.messages import HumanMessage, AIMessage
 
 # 1. 加载环境变量
 load_dotenv()
-
-# 确保 data 文件夹存在
 os.makedirs("data", exist_ok=True)
 
 st.set_page_config(page_title="私有文献知识库", page_icon="📚", layout="wide")
-st.title("📚 私有文献知识库 (记忆对话版)")
+st.title("📚 私有文献知识库 (专业级 RAG 版)")
 
 # ================= 侧边栏：文件上传与管理 =================
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
-# 【新增】初始化聊天记录状态
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -48,7 +44,6 @@ with st.sidebar:
                     f.write(uploaded_file.getbuffer())
             st.cache_resource.clear()
             st.session_state.uploader_key += 1
-            # 【细节】更新知识库后，清空之前的聊天记录，避免串戏
             st.session_state.messages = []
             st.rerun()
         else:
@@ -64,41 +59,40 @@ with st.sidebar:
         st.text("暂无文献，请上传")
 
 
-# ================= 核心逻辑 =================
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
-
-
+# ================= 核心逻辑：解耦检索与生成 =================
 @st.cache_resource
 def init_knowledge_base():
     loader = PyPDFDirectoryLoader("data")
     docs = loader.load()
 
     if not docs:
-        return None
+        return None, None
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     splits = text_splitter.split_documents(docs)
 
     embeddings = HuggingFaceEmbeddings(model_name="shibing624/text2vec-base-chinese")
     vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+
+    # 拿到检索器
     retriever = vectorstore.as_retriever()
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = os.environ.get("YOUR_DASHSCOPE_API_KEY")
     if not api_key:
-        st.error("⚠️ 未读取到 DEEPSEEK_API_KEY，请检查 .env 文件！")
+        st.error(" 未读取到 YOUR_DASHSCOPE_API_KEY，请检查 .env 文件！")
         st.stop()
 
     llm = ChatOpenAI(
-        model="deepseek-chat",
+        model="qwen3-max",
         api_key=api_key,
-        base_url="https://api.deepseek.com",
-        temperature=0
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        temperature=0,
+        streaming=True
     )
 
-    # 【升级】使用 from_messages 组合 System 提示、历史记录占位符和当前问题
     system_template = """你是一个专业的文献助手。请使用以下检索到的背景信息来回答用户的问题。
     如果你不知道答案，请直接说不知道，不要编造。
+    在回答的末尾，你可以简要提及你是根据哪些资料得出的结论。
 
     背景信息：
     {context}
@@ -106,61 +100,97 @@ def init_knowledge_base():
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_template),
-        MessagesPlaceholder(variable_name="chat_history"),  # 动态插入历史记录
+        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{question}")
     ])
 
-    # 【升级】LCEL 字典映射，将输入的 question 和 history 分配给组件
-    rag_chain = (
-            {
-                "context": lambda x: format_docs(retriever.invoke(x["question"])),
-                "question": lambda x: x["question"],
-                "chat_history": lambda x: x["chat_history"]
-            }
-            | prompt
-            | llm
-            | StrOutputParser()
-    )
-    return rag_chain
+    # 【核心改动】我们把检索器抽离出来了，这里的 rag_chain 只负责生成答案
+    rag_chain = prompt | llm | StrOutputParser()
+
+    return retriever, rag_chain
 
 
-rag_chain = init_knowledge_base()
+# 获取检索器和生成链
+retriever, rag_chain = init_knowledge_base()
 
-# ================= 主界面：微信式聊天交互 =================
-if rag_chain is None:
+# ================= 主界面：流式聊天与溯源 =================
+if retriever is None:
     st.info("👈 请先在左侧边栏上传 PDF 文献，并点击【保存并更新知识库】")
 else:
-    # 1. 展示历史聊天记录（让你能像看微信一样看到之前的对话）
+    # 渲染历史聊天记录（带上来源信息）
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            # 如果这条消息有来源信息，就展示出来
+            if "sources" in msg and msg["sources"]:
+                with st.expander("📚 查看参考来源"):
+                    for i, source in enumerate(msg["sources"]):
+                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页)**")
+                        st.caption(source['content'])
 
-    # 2. 底部浮动的聊天输入框
     if question := st.chat_input("请根据文献内容提问（支持上下文追问）..."):
-        # 将用户问题显示在页面上并存入记忆
+        # 1. 存入并展示用户问题
         with st.chat_message("user"):
             st.markdown(question)
         st.session_state.messages.append({"role": "user", "content": question})
 
-        # 转换 Streamlit 的记忆格式为 LangChain 需要的格式
+        # 组装历史记录
         chat_history = []
-        for msg in st.session_state.messages[:-1]:  # 不包含刚发送的这句
+        for msg in st.session_state.messages[:-1]:
             if msg["role"] == "user":
                 chat_history.append(HumanMessage(content=msg["content"]))
             else:
                 chat_history.append(AIMessage(content=msg["content"]))
 
-        # AI 思考并回答
+        # 2. AI 处理环节
         with st.chat_message("assistant"):
-            with st.spinner("DeepSeek 正在翻阅文献思考中..."):
-                try:
-                    # 将问题和历史记录一起喂给大模型
-                    response = rag_chain.invoke({
-                        "question": question,
-                        "chat_history": chat_history
-                    })
-                    st.markdown(response)
-                    # 将 AI 的回答也存入记忆
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                except Exception as e:
-                    st.error(f"出错了：{e}")
+            # 先检索文档（溯源的秘密就在这里）
+            with st.spinner("🔍 正在检索相关文献..."):
+                retrieved_docs = retriever.invoke(question)
+
+            # 格式化检索到的文档用于大模型，同时提取来源数据用于 UI 展示
+            context_text = ""
+            source_data = []
+            for i, doc in enumerate(retrieved_docs):
+                # 从 PDF 的 metadata 里提取文件名和页码
+                file_name = os.path.basename(doc.metadata.get('source', '未知文档'))
+                # PDF页码默认从0开始，我们加1变成人类可读的页码
+                page_num = doc.metadata.get('page', 0) + 1
+
+                context_text += f"\n[文档 {i + 1}] {file_name} (第{page_num}页):\n{doc.page_content}\n"
+                source_data.append({
+                    "file": file_name,
+                    "page": page_num,
+                    "content": doc.page_content[:150] + "..."  # 截取部分文本用于UI展示
+                })
+
+            # 【核心魔法：流式输出】
+            response_placeholder = st.empty()  # 创建一个空的占位符
+            full_response = ""
+
+            # 使用 .stream() 替代 .invoke()，实现打字机效果
+            for chunk in rag_chain.stream({
+                "context": context_text,
+                "question": question,
+                "chat_history": chat_history
+            }):
+                full_response += chunk
+                # 动态加上光标，视觉效果拉满
+                response_placeholder.markdown(full_response + "▌")
+
+            # 输出结束后去掉光标
+            response_placeholder.markdown(full_response)
+
+            # 展示参考来源组件
+            if source_data:
+                with st.expander("📚 查看参考来源"):
+                    for i, source in enumerate(source_data):
+                        st.markdown(f"**[{i + 1}] {source['file']} (第 {source['page']} 页)**")
+                        st.caption(source['content'])
+
+            # 将完整的回答和来源存入记忆
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": full_response,
+                "sources": source_data
+            })
