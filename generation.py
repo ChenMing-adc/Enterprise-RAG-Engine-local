@@ -76,4 +76,53 @@ def build_rag_chain():
     return prompt | llm | StrOutputParser()
 
 
+# ... 保留原有的 _get_llm, build_query_rewriter, build_rag_chain 等代码 ...
+
+def build_intent_router():
+    """【新增】意图分类器：判断是走 RAG 还是走普通闲聊"""
+    # 意图识别不需要创造力，temperature 设为 0
+    llm = _get_llm(temperature=0.0)
+
+    router_template = """你是一个智能路由中枢。请分析用户的【最新问题】，决定是否需要去私有文献库中检索资料。
+
+    判断标准：
+    1. 如果用户是在打招呼（如你好、hi）、表达感谢、闲聊、或者问你的身份，请输出：CHITCHAT
+    2. 如果用户在询问具体的知识、探讨概念、或者要求分析总结某些信息，请输出：RAG
+
+    【历史对话】：
+    {chat_history}
+
+    【最新问题】：
+    {question}
+
+    请严格只输出 "CHITCHAT" 或 "RAG" 这两个词中的一个，不要有任何标点符号或废话！
+    """
+
+    prompt = ChatPromptTemplate.from_template(router_template)
+
+    # 强制清理输出，提取纯大写字母
+    def parse_intent(text: str):
+        result = text.strip().upper()
+        return "CHITCHAT" if "CHITCHAT" in result else "RAG"
+
+    return prompt | llm | StrOutputParser() | RunnableLambda(parse_intent)
+
+
+def build_chitchat_chain():
+    """【新增】闲聊专属链：不包含庞大的 context 上下文"""
+    llm = _get_llm(temperature=0.5)  # 闲聊可以生动一点
+
+    system_template = """你是一个友好、专业的 AI 助手。
+    由于用户当前只是在闲聊或打招呼，你不需要引用外部文献，请用自然、友好的语气直接回应用户。
+    """
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_template),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{question}")
+    ])
+
+    return prompt | llm | StrOutputParser()
+
+
 from langchain_core.runnables import RunnableLambda  # 确保导入
