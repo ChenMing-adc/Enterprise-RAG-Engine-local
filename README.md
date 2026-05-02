@@ -1,4 +1,4 @@
-# 📚 Enterprise RAG Engine (私有知识库引擎)
+# 📚 Local RAG Engine (私有知识库引擎)
 
 本项目是一个完全解耦的 RAG (检索增强生成) 系统，基于 DeepSeek 大模型与 LangChain 生态构建。解决了传统 RAG 系统在面对数学公式、多轮代词指代、长尾词召回等场景下的工业级痛点。
 
